@@ -163,7 +163,7 @@ Resources:
       HealthCheckProtocol: HTTP
       Matcher: { HttpCode: 200-399 }
 
-    TGGreen:
+  TGGreen:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       Name: !Sub "${TGPrefix}-${Env}-green"
