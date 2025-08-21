@@ -26,6 +26,18 @@ Parameters:
   PineconeSecretArn:
     Type: String
     Description: "ARN of the Secrets Manager secret for PINECONE_API_KEY"
+  MinCapacity:
+    Type: Number
+    Default: 1
+    Description: "Minimum task count"
+  MaxCapacity:
+    Type: Number
+    Default: 2
+    Description: "Maximum task count"
+  CpuScaleTarget:
+    Type: Number
+    Default: 60
+    Description: "Target CPU % for autoscaling (ECSServiceAverageCPUUtilization)"
 
   # NEW: optional email for alerts (leave blank to skip subscription)
   AlertEmail:
@@ -230,6 +242,14 @@ Resources:
       DesiredCount: !Ref DesiredCount
       LaunchType: FARGATE
       # (Optional hardening) give new tasks a minute before ALB judges health
+
+      # NEW: safer rollouts with auto-rollback
+      DeploymentConfiguration:
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
       HealthCheckGracePeriodSeconds: 60
       NetworkConfiguration:
         AwsvpcConfiguration:
@@ -315,6 +335,30 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
       AlarmActions: [ !Ref AlarmTopic ]
+  
+  ScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Ref MaxCapacity
+      MinCapacity: !Ref MinCapacity
+      ResourceId: !Sub "service/${ProjectName}-${Env}/${ProjectName}-${Env}"
+      RoleARN: !Ref "AWS::NoValue"   # use ECS service-linked role automatically
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  CpuTargetTracking:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub "${ProjectName}-${Env}-cpu-tt"
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref ScalableTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: !Ref CpuScaleTarget
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        ScaleInCooldown: 120
+        ScaleOutCooldown: 60
+
 
 Outputs:
   AlbDNS:
