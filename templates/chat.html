@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Medical Chatbot</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Bootstrap & Icons -->
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/css/bootstrap.min.css"
+        integrity="sha384-MCw98/SFnGE8fJT3GXwEOngsV7Zt27NXFoaoApmYm81iuXoPkFOJwJ8ERdknLPMO" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.5.0/css/all.css"
+        integrity="sha384-B4dIYHKNBt8Bc12p+WXckhzcICo0wtJAoU8YZTY5qE0Id1GSseTk6S+L3BlXeVIU" crossorigin="anonymous">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+
+  <!-- jQuery (keep for your existing AJAX) -->
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+
+  <!-- Your custom styles -->
+  <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css')}}"/>
+</head>
+
+<body>
+  <div class="container-fluid h-100">
+    <div class="row justify-content-center h-100">
+      <div class="col-md-8 col-xl-6 chat">
+        <div class="card chat-card shadow-xl">
+          <div class="card-header msg_head d-flex align-items-center">
+            <div class="d-flex align-items-center w-100">
+              <div class="img_cont">
+                <img src="https://cdn-icons-png.flaticon.com/512/387/387569.png" class="rounded-circle user_img" alt="Bot Avatar"/>
+                <span class="online_icon pulse"></span>
+              </div>
+              <div class="user_info">
+                <span class="title">Medical Chatbot</span>
+                <p class="subtitle"><i class="fas fa-stethoscope mr-1"></i>Ask health questions, get guidance</p>
+              </div>
+              <div class="ml-auto d-none d-md-flex align-items-center">
+                <span class="pill-badge"><i class="fas fa-lock mr-1"></i> Secure</span>
+              </div>
+            </div>
+          </div>
+
+          <div id="messageFormeight" class="card-body msg_card_body">
+            <!-- Messages appended here -->
+          </div>
+
+          <div class="card-footer">
+            <form id="messageArea" class="input-group">
+              <input type="text" id="text" name="msg" placeholder="Type your message…" autocomplete="off" class="form-control type_msg" required/>
+              <div class="input-group-append">
+                <button type="submit" id="send" class="input-group-text send_btn" aria-label="Send message">
+                  <i class="fas fa-paper-plane"></i>
+                </button>
+              </div>
+            </form>
+            <div id="typing" class="typing hidden">
+              <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+              <span class="typing-text">Bot is typing…</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- quick suggestions (optional) -->
+        <div class="quick-chips mt-3 text-center">
+          <button class="chip" data-fill="What are common cold symptoms?">Common cold</button>
+          <button class="chip" data-fill="How do I track my medications?">Medication help</button>
+          <button class="chip" data-fill="When should I see a doctor for a fever?">Fever guidance</button>
+          <button class="chip" data-fill="How much water should I drink daily?">Hydration</button>
+        </div>
+
+        <small class="disclaimer d-block text-center mt-2">
+          This chatbot provides general information and is not a substitute for professional medical advice. In an emergency, call your local emergency number.
+        </small>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function pad2(n){ return n < 10 ? '0' + n : n; }
+    function timestamp(){
+      const d = new Date();
+      return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+    }
+    function scrollToBottom(){
+      const body = document.getElementById('messageFormeight');
+      body.scrollTop = body.scrollHeight;
+    }
+
+    function typing(on){
+      const el = document.getElementById('typing');
+      if(on){ el.classList.remove('hidden'); } else { el.classList.add('hidden'); }
+    }
+
+    $(document).on('click', '.chip', function(){
+      const fill = $(this).data('fill');
+      $('#text').val(fill).focus();
+    });
+
+    $(document).ready(function() {
+      $("#messageArea").on("submit", function(event) {
+        event.preventDefault();
+
+        const rawText = $("#text").val().trim();
+        if(!rawText) return;
+
+        const userHtml = `
+          <div class="d-flex justify-content-end mb-3">
+            <div class="msg_cotainer_send">
+              ${$('<div/>').text(rawText).html()}
+              <span class="msg_time_send">${timestamp()}</span>
+              <span class="tail right"></span>
+            </div>
+            <div class="img_cont_msg">
+              <img src="https://i.ibb.co/d5b84Xw/Untitled-design.png" class="rounded-circle user_img_msg" alt="You">
+            </div>
+          </div>
+        `;
+
+        $("#text").val("");
+        $("#messageFormeight").append(userHtml);
+        scrollToBottom();
+
+        typing(true);
+        $("#send").prop("disabled", true);
+
+        $.ajax({
+          data: { msg: rawText },
+          type: "POST",
+          url: "/get"
+        })
+        .done(function(data) {
+          const botHtml = `
+            <div class="d-flex justify-content-start mb-3">
+              <div class="img_cont_msg">
+                <img src="https://cdn-icons-png.flaticon.com/512/387/387569.png" class="rounded-circle user_img_msg" alt="Bot">
+              </div>
+              <div class="msg_cotainer">
+                ${data}
+                <span class="msg_time">${timestamp()}</span>
+                <span class="tail left"></span>
+              </div>
+            </div>
+          `;
+          $("#messageFormeight").append($.parseHTML(botHtml));
+        })
+        .fail(function(){
+          const errHtml = `
+            <div class="d-flex justify-content-start mb-3">
+              <div class="img_cont_msg">
+                <img src="https://cdn-icons-png.flaticon.com/512/387/387569.png" class="rounded-circle user_img_msg" alt="Bot">
+              </div>
+              <div class="msg_cotainer error">
+                Sorry, I couldn’t reach the server. Please try again.
+                <span class="msg_time">${timestamp()}</span>
+                <span class="tail left"></span>
+              </div>
+            </div>
+          `;
+          $("#messageFormeight").append($.parseHTML(errHtml));
+        })
+        .always(function(){
+          typing(false);
+          $("#send").prop("disabled", false);
+          scrollToBottom();
+        });
+      });
+    });
+  </script>
+
+  <!-- Bootstrap JS (optional for some interactions) -->
+  <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/js/bootstrap.min.js"
+          integrity="sha384-ChfqqxuZUCnJSK3+MXmPNIyE6ZbWh2IMqE241rYiqJxyMiZ6OW/JmZQ5stwEULTy"
+          crossorigin="anonymous"></script>
+</body>
+</html>
