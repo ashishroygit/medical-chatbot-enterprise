@@ -41,7 +41,10 @@ Parameters:
   TGPrefix:
     Type: String
     Default: "medchat"
-    Description: "Short prefix for ALB TargetGroup names (must keep <=32 chars overall)"
+    Description: "Short prefix for TargetGroup names (<=32 chars)"
+  BlueTGName:
+    Type: String
+    Description: "Existing (blue) Target Group NAME (not ARN)"
 
   # NEW: optional email for alerts (leave blank to skip subscription)
   AlertEmail:
@@ -154,7 +157,6 @@ Resources:
   TG:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      Name: !Sub "${TGPrefix}-${Env}-blue"
       TargetType: ip
       Protocol: HTTP
       Port: !Ref AppPort
@@ -181,8 +183,10 @@ Resources:
       LoadBalancerArn: !Ref ALB
       Port: 80
       Protocol: HTTP
-      DefaultActions: [{ Type: forward, TargetGroupArn: !Ref TG }]
-  
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TG
+
   ListenerTestHTTP:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
@@ -278,7 +282,7 @@ Resources:
     Type: AWS::ECS::Service
     DependsOn:
       - ListenerHTTP
-      - ListenerTestHTTP        # add this because CodeDeploy references it
+      - ListenerTestHTTP
     Properties:
       ServiceName: !Sub "${ProjectName}-${Env}"
       Cluster: !Ref Cluster
@@ -286,7 +290,7 @@ Resources:
       DesiredCount: !Ref DesiredCount
       LaunchType: FARGATE
       DeploymentController:
-        Type: CODE_DEPLOY        # <<< REQUIRED for blue/green
+        Type: CODE_DEPLOY
       HealthCheckGracePeriodSeconds: 60
       NetworkConfiguration:
         AwsvpcConfiguration:
@@ -294,7 +298,7 @@ Resources:
           Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
           SecurityGroups: [!Ref EcsSG]
       LoadBalancers:
-        - TargetGroupArn: !Ref TG   # BLUE TG (prod traffic)
+        - TargetGroupArn: !Ref TG     # BLUE stays attached here
           ContainerName: web
           ContainerPort: !Ref AppPort
 
@@ -397,6 +401,19 @@ Resources:
         ScaleInCooldown: 120
         ScaleOutCooldown: 60
 
+  CodeDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Env}-codedeploy"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codedeploy.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRoleForECS
+
   CodeDeployApp:
     Type: AWS::CodeDeploy::Application
     Properties:
@@ -405,11 +422,16 @@ Resources:
 
   CodeDeployDG:
     Type: AWS::CodeDeploy::DeploymentGroup
+    DependsOn:
+      - TG
+      - TGGreen
+      - ListenerHTTP
+      - ListenerTestHTTP
     Properties:
       ApplicationName: !Ref CodeDeployApp
       DeploymentGroupName: !Sub "${ProjectName}-${Env}"
       ServiceRoleArn: !GetAtt CodeDeployRole.Arn
-      DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce    # simple & fast for learning
+      DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
       AutoRollbackConfiguration:
         Enabled: true
         Events: [DEPLOYMENT_FAILURE, DEPLOYMENT_STOP_ON_ALARM, DEPLOYMENT_STOP_ON_REQUEST]
@@ -422,8 +444,8 @@ Resources:
       LoadBalancerInfo:
         TargetGroupPairInfoList:
           - TargetGroups:
-              - Name: !Sub "${TGPrefix}-${Env}-blue"
-              - Name: !Sub "${TGPrefix}-${Env}-green"
+              - Name: !Ref BlueTGName                 # existing blue TG NAME
+              - Name: !Sub "${TGPrefix}-${Env}-green" # our new green TG name
             ProdTrafficRoute:
               ListenerArns: [ !Ref ListenerHTTP ]
             TestTrafficRoute:
@@ -431,6 +453,7 @@ Resources:
       ECSServices:
         - ClusterName: !Sub "${ProjectName}-${Env}"
           ServiceName: !Sub "${ProjectName}-${Env}"
+
 
 
 

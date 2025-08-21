@@ -52,7 +52,7 @@ jobs:
           docker build -t "$REGISTRY/$ECR_REPO:$IMAGE_TAG" .
           docker push "$REGISTRY/$ECR_REPO:$IMAGE_TAG"
           echo "image_uri=$REGISTRY/$ECR_REPO:$IMAGE_TAG" >> $GITHUB_OUTPUT
-      
+
       - name: Capture image digest
         id: digest
         env:
@@ -97,6 +97,21 @@ jobs:
           echo "OPENAI ARN: $OPENAI_ARN"
           echo "PINECONE ARN: $PINECONE_ARN"
 
+      - name: Resolve blue TG NAME (staging)
+        id: blue_tg_name
+        run: |
+          STACK="${{ env.PROJECT_NAME }}-staging"
+          TG_ARN=$(aws ecs describe-services \
+            --cluster "$STACK" \
+            --services "$STACK" \
+            --query 'services[0].loadBalancers[0].targetGroupArn' \
+            --output text --region "${{ env.AWS_REGION }}")
+          NAME=$(aws elbv2 describe-target-groups \
+            --target-group-arns "$TG_ARN" \
+            --query 'TargetGroups[0].TargetGroupName' \
+            --output text --region "${{ env.AWS_REGION }}")
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
       - name: Validate template with CloudFormation
         run: aws cloudformation validate-template --template-body "file://${{ env.CFN_TEMPLATE }}"
 
@@ -112,8 +127,8 @@ jobs:
               AppPort="${APP_PORT}" ContainerCpu="${CPU}" ContainerMemory="${MEMORY}" DesiredCount="${DESIRED_COUNT}" \
               OpenAISecretArn="${{ steps.sm_arns.outputs.openai }}" \
               PineconeSecretArn="${{ steps.sm_arns.outputs.pinecone }}" \
-              AlertEmail="abelashishroy@gmail.com" \
-              MinCapacity="1" MaxCapacity="2" CpuScaleTarget="60"
+              MinCapacity="1" MaxCapacity="2" CpuScaleTarget="60" \
+              TGPrefix="medchat" BlueTGName="${{ steps.blue_tg_name.outputs.name }}"
 
       - name: Start CodeDeploy blue/green (staging)
         shell: bash
@@ -126,13 +141,11 @@ jobs:
           STACK="${PROJECT_NAME}-staging"
           FAMILY="$STACK"
 
-          # latest task def ARN (CFN created it when ImageUri changed)
           TASK_DEF_ARN="$(aws ecs list-task-definitions \
             --family-prefix "$FAMILY" --sort DESC --max-items 1 \
             --query 'taskDefinitionArns[0]' --output text --region "$AWS_REGION")"
           echo "TaskDef: $TASK_DEF_ARN"
 
-          # Build AppSpec JSON safely with jq, then encode as a JSON string for the CLI param
           CONTENT="$(jq -n --arg td "$TASK_DEF_ARN" --argjson port "$APP_PORT" \
             '{version:1,Resources:[{TargetService:{Type:"AWS::ECS::Service",Properties:{TaskDefinition:$td,LoadBalancerInfo:{ContainerName:"web",ContainerPort:$port}}}}]}' \
             | jq -Rs .)"
@@ -144,7 +157,6 @@ jobs:
             --query deploymentId --output text --region "$AWS_REGION")"
           echo "DeployId: $DEPLOY_ID"
           aws deploy wait deployment-successful --deployment-id "$DEPLOY_ID" --region "$AWS_REGION"
-
 
       - name: Output ALB DNS (staging)
         id: out
@@ -169,7 +181,7 @@ jobs:
   deploy_production:
     runs-on: ubuntu-latest
     needs: [build_and_push, deploy_staging]
-    environment: production   # add approval in repo Settings → Environments
+    environment: production
     steps:
       - uses: actions/checkout@v4
 
@@ -196,6 +208,21 @@ jobs:
           echo "OPENAI ARN: $OPENAI_ARN"
           echo "PINECONE ARN: $PINECONE_ARN"
 
+      - name: Resolve blue TG NAME (production)
+        id: blue_tg_name_prod
+        run: |
+          STACK="${{ env.PROJECT_NAME }}-production"
+          TG_ARN=$(aws ecs describe-services \
+            --cluster "$STACK" \
+            --services "$STACK" \
+            --query 'services[0].loadBalancers[0].targetGroupArn' \
+            --output text --region "${{ env.AWS_REGION }}")
+          NAME=$(aws elbv2 describe-target-groups \
+            --target-group-arns "$TG_ARN" \
+            --query 'TargetGroups[0].TargetGroupName' \
+            --output text --region "${{ env.AWS_REGION }}")
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
       - name: Deploy CFN (production)
         run: |
           aws cloudformation deploy \
@@ -209,8 +236,9 @@ jobs:
               OpenAISecretArn="${{ steps.sm_arns_prod.outputs.openai }}" \
               PineconeSecretArn="${{ steps.sm_arns_prod.outputs.pinecone }}" \
               AlertEmail="abelashishroy@gmail.com" \
-              MinCapacity="1" MaxCapacity="2" CpuScaleTarget="60"
-              
+              MinCapacity="1" MaxCapacity="2" CpuScaleTarget="60" \
+              TGPrefix="medchat" BlueTGName="${{ steps.blue_tg_name_prod.outputs.name }}"
+
       - name: Start CodeDeploy blue/green (production)
         shell: bash
         env:
@@ -238,7 +266,6 @@ jobs:
             --query deploymentId --output text --region "$AWS_REGION")"
           echo "DeployId: $DEPLOY_ID"
           aws deploy wait deployment-successful --deployment-id "$DEPLOY_ID" --region "$AWS_REGION"
-
 
       - name: Output ALB DNS (production)
         run: |
