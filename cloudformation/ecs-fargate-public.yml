@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: ECS Fargate (public subnets, no NAT) + ALB + Logs + IAM + Alerts
+Description: ECS Fargate (public subnets, no NAT) + ALB + Logs + IAM + CodeDeploy blue/green
 
 Parameters:
   ProjectName:
     Type: String
-    Default: "medical-chatbot-autodeploy"
+    Default: "medical-chatbot-enterprise"
   Env:
     Type: String
     AllowedValues: [staging, production]
@@ -19,7 +19,7 @@ Parameters:
     Type: Number
   ImageUri:
     Type: String
-    Description: "ECR image URI with tag (e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com/medical-chatbot-autodeploy:abcd1234)"
+    Description: "ECR image URI (tag or digest)"
   OpenAISecretArn:
     Type: String
     Description: "ARN of the Secrets Manager secret for OPENAI_API_KEY"
@@ -29,15 +29,12 @@ Parameters:
   MinCapacity:
     Type: Number
     Default: 1
-    Description: "Minimum task count"
   MaxCapacity:
     Type: Number
     Default: 2
-    Description: "Maximum task count"
   CpuScaleTarget:
     Type: Number
     Default: 60
-    Description: "Target CPU % for autoscaling (ECSServiceAverageCPUUtilization)"
   TGPrefix:
     Type: String
     Default: "medchat"
@@ -45,16 +42,13 @@ Parameters:
   BlueTGName:
     Type: String
     Description: "Existing (blue) Target Group NAME (not ARN)"
-
-  # NEW: optional email for alerts (leave blank to skip subscription)
   AlertEmail:
     Type: String
     Default: ""
-    Description: "Optional email for SNS alerts subscription (blank = no email subscription)"
+    Description: "If set, subscribe this email to SNS alerts"
 
 Conditions:
-  # NEW: create an email subscription only if an email is provided
-  HasAlertEmail: !Not [ !Equals [ !Ref AlertEmail, "" ] ]
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
 
 Resources:
   VPC:
@@ -126,7 +120,7 @@ Resources:
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
-        - { IpProtocol: tcp, FromPort: 9000, ToPort: 9000, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 9000, ToPort: 9000, CidrIp: 0.0.0.0/0 } # test listener
       SecurityGroupEgress:
         - { IpProtocol: -1, CidrIp: 0.0.0.0/0 }
       Tags: [{ Key: Name, Value: !Sub "${ProjectName}-${Env}-alb-sg" }]
@@ -157,6 +151,7 @@ Resources:
   TG:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
+      # No Name: keep existing blue TG without replacement
       TargetType: ip
       Protocol: HTTP
       Port: !Ref AppPort
@@ -229,22 +224,8 @@ Resources:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
                 Resource:
-                  - !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}/${Env}/OPENAI_API_KEY-*
-                  - !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${ProjectName}/${Env}/PINECONE_API_KEY-*
-
-  CodeDeployRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "${ProjectName}-${Env}-codedeploy"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: { Service: codedeploy.amazonaws.com }
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRoleForECS
-
+                  - !Ref OpenAISecretArn
+                  - !Ref PineconeSecretArn
 
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
@@ -275,7 +256,7 @@ Resources:
             LogDriver: awslogs
             Options:
               awslogs-group: !Ref LogGroup
-              awslogs-region: !Sub "${AWS::Region}"
+              awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
 
   Service:
@@ -284,7 +265,7 @@ Resources:
       - ListenerHTTP
       - ListenerTestHTTP
     Properties:
-      ServiceName: !Sub "${ProjectName}-${Env}"
+      ServiceName: !Sub "${ProjectName}-${Env}-svc"   # new name to allow replacement
       Cluster: !Ref Cluster
       TaskDefinition: !Ref TaskDefinition
       DesiredCount: !Ref DesiredCount
@@ -298,93 +279,17 @@ Resources:
           Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
           SecurityGroups: [!Ref EcsSG]
       LoadBalancers:
-        - TargetGroupArn: !Ref TG     # BLUE stays attached here
+        - TargetGroupArn: !Ref TG
           ContainerName: web
           ContainerPort: !Ref AppPort
 
-
-  # ===================== NEW: Alerts (SNS + CloudWatch) =====================
-
-  AlarmTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: !Sub "${ProjectName}-${Env}-alerts"
-
-  AlarmSubscriptionEmail:
-    Type: AWS::SNS::Subscription
-    Condition: HasAlertEmail
-    Properties:
-      TopicArn: !Ref AlarmTopic
-      Protocol: email
-      Endpoint: !Ref AlertEmail
-
-  AlarmAlbTarget5xx:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub "${ProjectName}-${Env}-ALB-Target5xx"
-      AlarmDescription: "High 5xx from targets behind ALB"
-      Namespace: AWS/ApplicationELB
-      MetricName: HTTPCode_Target_5XX_Count
-      Dimensions:
-        - Name: LoadBalancer
-          Value: !GetAtt ALB.LoadBalancerFullName
-        - Name: TargetGroup
-          Value: !GetAtt TG.TargetGroupFullName
-      Statistic: Sum
-      Period: 60
-      EvaluationPeriods: 5
-      Threshold: 5
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-      AlarmActions: [ !Ref AlarmTopic ]
-
-  AlarmAlbUnhealthyTargets:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub "${ProjectName}-${Env}-ALB-UnhealthyTargets"
-      AlarmDescription: "Any target becomes unhealthy"
-      Namespace: AWS/ApplicationELB
-      MetricName: UnHealthyHostCount
-      Dimensions:
-        - Name: LoadBalancer
-          Value: !GetAtt ALB.LoadBalancerFullName
-        - Name: TargetGroup
-          Value: !GetAtt TG.TargetGroupFullName
-      Statistic: Maximum
-      Period: 60
-      EvaluationPeriods: 3
-      Threshold: 0
-      ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: notBreaching
-      AlarmActions: [ !Ref AlarmTopic ]
-
-  AlarmEcsCpuHigh:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub "${ProjectName}-${Env}-ECS-CPU-High"
-      AlarmDescription: "ECS service CPU >= 80% for 5 min"
-      Namespace: AWS/ECS
-      MetricName: CPUUtilization
-      Dimensions:
-        - Name: ClusterName
-          Value: !Sub "${ProjectName}-${Env}"
-        - Name: ServiceName
-          Value: !Sub "${ProjectName}-${Env}"
-      Statistic: Average
-      Period: 60
-      EvaluationPeriods: 5
-      Threshold: 80
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-      AlarmActions: [ !Ref AlarmTopic ]
-  
+  # Autoscaling (target tracking on CPU)
   ScalableTarget:
     Type: AWS::ApplicationAutoScaling::ScalableTarget
     Properties:
       MaxCapacity: !Ref MaxCapacity
       MinCapacity: !Ref MinCapacity
-      ResourceId: !Sub "service/${ProjectName}-${Env}/${ProjectName}-${Env}"
-      RoleARN: !Ref "AWS::NoValue"   # use ECS service-linked role automatically
+      ResourceId: !Sub "service/${ProjectName}-${Env}/${ProjectName}-${Env}-svc"
       ScalableDimension: ecs:service:DesiredCount
       ServiceNamespace: ecs
 
@@ -401,6 +306,7 @@ Resources:
         ScaleInCooldown: 120
         ScaleOutCooldown: 60
 
+  # CodeDeploy (blue/green)
   CodeDeployRole:
     Type: AWS::IAM::Role
     Properties:
@@ -444,18 +350,51 @@ Resources:
       LoadBalancerInfo:
         TargetGroupPairInfoList:
           - TargetGroups:
-              - Name: !Ref BlueTGName                 # existing blue TG NAME
-              - Name: !Sub "${TGPrefix}-${Env}-green" # our new green TG name
+              - Name: !Ref BlueTGName
+              - Name: !Sub "${TGPrefix}-${Env}-green"
             ProdTrafficRoute:
               ListenerArns: [ !Ref ListenerHTTP ]
             TestTrafficRoute:
               ListenerArns: [ !Ref ListenerTestHTTP ]
       ECSServices:
         - ClusterName: !Sub "${ProjectName}-${Env}"
-          ServiceName: !Sub "${ProjectName}-${Env}"
+          ServiceName: !Sub "${ProjectName}-${Env}-svc"
 
+  # Optional: SNS + basic ALB 5XX alarm (prod only if AlertEmail set)
+  AlertsTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlertEmail
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Env}-alerts"
 
+  AlertsSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertsTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
 
+  Alb5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasAlertEmail
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Env}-ALB-Target-5XX"
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      ComparisonOperator: GreaterThanThreshold
+      Threshold: 0
+      EvaluationPeriods: 1
+      Period: 300
+      Statistic: Sum
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt ALB.LoadBalancerFullName
+        - Name: TargetGroup
+          Value: !GetAtt TG.TargetGroupFullName
+      AlarmActions:
+        - !Ref AlertsTopic
 
 Outputs:
   AlbDNS:
@@ -464,14 +403,3 @@ Outputs:
   Url:
     Description: "App URL"
     Value: !Sub "http://${ALB.DNSName}"
-  # Helpful outputs if you ever need to script alarm creation
-  LoadBalancerFullName:
-    Value: !GetAtt ALB.LoadBalancerFullName
-  TargetGroupFullName:
-    Value: !GetAtt TG.TargetGroupFullName
-  AlertsTopicArn:
-    Value: !Ref AlarmTopic
-  BlueTGFullName:
-    Value: !GetAtt TG.TargetGroupFullName
-  GreenTGFullName:
-    Value: !GetAtt TGGreen.TargetGroupFullName
