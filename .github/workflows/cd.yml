@@ -115,6 +115,37 @@ jobs:
               AlertEmail="abelashishroy@gmail.com" \
               MinCapacity="1" MaxCapacity="2" CpuScaleTarget="60"
 
+      - name: Start CodeDeploy blue/green (staging)
+        shell: bash
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+          PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          APP_PORT: ${{ env.APP_PORT }}
+        run: |
+          set -euo pipefail
+          STACK="${PROJECT_NAME}-staging"
+          FAMILY="$STACK"
+
+          # latest task def ARN (CFN created it when ImageUri changed)
+          TASK_DEF_ARN="$(aws ecs list-task-definitions \
+            --family-prefix "$FAMILY" --sort DESC --max-items 1 \
+            --query 'taskDefinitionArns[0]' --output text --region "$AWS_REGION")"
+          echo "TaskDef: $TASK_DEF_ARN"
+
+          # Build AppSpec JSON safely with jq, then encode as a JSON string for the CLI param
+          CONTENT="$(jq -n --arg td "$TASK_DEF_ARN" --argjson port "$APP_PORT" \
+            '{version:1,Resources:[{TargetService:{Type:"AWS::ECS::Service",Properties:{TaskDefinition:$td,LoadBalancerInfo:{ContainerName:"web",ContainerPort:$port}}}}]}' \
+            | jq -Rs .)"
+
+          DEPLOY_ID="$(aws deploy create-deployment \
+            --application-name "$STACK" \
+            --deployment-group-name "$STACK" \
+            --revision "revisionType=AppSpecContent,appSpecContent={content=$CONTENT}" \
+            --query deploymentId --output text --region "$AWS_REGION")"
+          echo "DeployId: $DEPLOY_ID"
+          aws deploy wait deployment-successful --deployment-id "$DEPLOY_ID" --region "$AWS_REGION"
+
+
       - name: Output ALB DNS (staging)
         id: out
         run: |
@@ -179,6 +210,35 @@ jobs:
               PineconeSecretArn="${{ steps.sm_arns_prod.outputs.pinecone }}" \
               AlertEmail="abelashishroy@gmail.com" \
               MinCapacity="1" MaxCapacity="2" CpuScaleTarget="60"
+              
+      - name: Start CodeDeploy blue/green (production)
+        shell: bash
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+          PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          APP_PORT: ${{ env.APP_PORT }}
+        run: |
+          set -euo pipefail
+          STACK="${PROJECT_NAME}-production"
+          FAMILY="$STACK"
+
+          TASK_DEF_ARN="$(aws ecs list-task-definitions \
+            --family-prefix "$FAMILY" --sort DESC --max-items 1 \
+            --query 'taskDefinitionArns[0]' --output text --region "$AWS_REGION")"
+          echo "TaskDef: $TASK_DEF_ARN"
+
+          CONTENT="$(jq -n --arg td "$TASK_DEF_ARN" --argjson port "$APP_PORT" \
+            '{version:1,Resources:[{TargetService:{Type:"AWS::ECS::Service",Properties:{TaskDefinition:$td,LoadBalancerInfo:{ContainerName:"web",ContainerPort:$port}}}}]}' \
+            | jq -Rs .)"
+
+          DEPLOY_ID="$(aws deploy create-deployment \
+            --application-name "$STACK" \
+            --deployment-group-name "$STACK" \
+            --revision "revisionType=AppSpecContent,appSpecContent={content=$CONTENT}" \
+            --query deploymentId --output text --region "$AWS_REGION")"
+          echo "DeployId: $DEPLOY_ID"
+          aws deploy wait deployment-successful --deployment-id "$DEPLOY_ID" --region "$AWS_REGION"
+
 
       - name: Output ALB DNS (production)
         run: |
