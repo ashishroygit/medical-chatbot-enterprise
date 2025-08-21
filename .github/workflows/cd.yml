@@ -24,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_uri: ${{ steps.build.outputs.image_uri }}
+      image_uri_digest: ${{ steps.digest.outputs.image_uri_digest }}
     steps:
       - uses: actions/checkout@v4
 
@@ -51,6 +52,20 @@ jobs:
           docker build -t "$REGISTRY/$ECR_REPO:$IMAGE_TAG" .
           docker push "$REGISTRY/$ECR_REPO:$IMAGE_TAG"
           echo "image_uri=$REGISTRY/$ECR_REPO:$IMAGE_TAG" >> $GITHUB_OUTPUT
+      
+      - name: Capture image digest
+        id: digest
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          DIGEST=$(aws ecr describe-images \
+            --repository-name "$ECR_REPO" \
+            --image-ids imageTag="$IMAGE_TAG" \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+          echo "Resolved digest: $DIGEST"
+          echo "image_uri_digest=$REGISTRY/$ECR_REPO@$DIGEST" >> $GITHUB_OUTPUT
 
   deploy_staging:
     runs-on: ubuntu-latest
@@ -93,7 +108,7 @@ jobs:
             --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               ProjectName="${PROJECT_NAME}" Env="staging" \
-              ImageUri="${{ needs.build_and_push.outputs.image_uri }}" \
+              ImageUri="${{ needs.build_and_push.outputs.image_uri_digest }}" \
               AppPort="${APP_PORT}" ContainerCpu="${CPU}" ContainerMemory="${MEMORY}" DesiredCount="${DESIRED_COUNT}" \
               OpenAISecretArn="${{ steps.sm_arns.outputs.openai }}" \
               PineconeSecretArn="${{ steps.sm_arns.outputs.pinecone }}" \
@@ -157,7 +172,7 @@ jobs:
             --capabilities CAPABILITY_NAMED_IAM \
             --parameter-overrides \
               ProjectName="${PROJECT_NAME}" Env="production" \
-              ImageUri="${{ needs.build_and_push.outputs.image_uri }}" \
+              ImageUri="${{ needs.build_and_push.outputs.image_uri_digest }}" \
               AppPort="${APP_PORT}" ContainerCpu="${CPU}" ContainerMemory="${MEMORY}" DesiredCount="${DESIRED_COUNT}" \
               OpenAISecretArn="${{ steps.sm_arns_prod.outputs.openai }}" \
               PineconeSecretArn="${{ steps.sm_arns_prod.outputs.pinecone }}" \
