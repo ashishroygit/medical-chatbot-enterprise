@@ -56,15 +56,14 @@ jobs:
       - name: Capture image digest
         id: digest
         env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          REGISTRY="${{ steps.login-ecr.outputs.registry }}"
           DIGEST=$(aws ecr describe-images \
             --repository-name "$ECR_REPO" \
             --image-ids imageTag="$IMAGE_TAG" \
             --query 'imageDetails[0].imageDigest' \
             --output text)
-          echo "Resolved digest: $DIGEST"
           echo "image_uri_digest=$REGISTRY/$ECR_REPO@$DIGEST" >> $GITHUB_OUTPUT
 
   deploy_staging:
@@ -94,25 +93,8 @@ jobs:
           PINECONE_ARN=$(aws secretsmanager describe-secret --secret-id "${PROJECT_NAME}/staging/PINECONE_API_KEY" --query 'ARN' --output text)
           echo "openai=$OPENAI_ARN" >> $GITHUB_OUTPUT
           echo "pinecone=$PINECONE_ARN" >> $GITHUB_OUTPUT
-          echo "OPENAI ARN: $OPENAI_ARN"
-          echo "PINECONE ARN: $PINECONE_ARN"
 
-      - name: Resolve blue TG NAME (staging)
-        id: blue_tg_name
-        run: |
-          STACK="${{ env.PROJECT_NAME }}-staging"
-          TG_ARN=$(aws ecs describe-services \
-            --cluster "$STACK" \
-            --services "$STACK" \
-            --query 'services[0].loadBalancers[0].targetGroupArn' \
-            --output text --region "${{ env.AWS_REGION }}")
-          NAME=$(aws elbv2 describe-target-groups \
-            --target-group-arns "$TG_ARN" \
-            --query 'TargetGroups[0].TargetGroupName' \
-            --output text --region "${{ env.AWS_REGION }}")
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
-
-      - name: Validate template with CloudFormation
+      - name: Validate template
         run: aws cloudformation validate-template --template-body "file://${{ env.CFN_TEMPLATE }}"
 
       - name: Deploy CFN (staging)
@@ -128,7 +110,7 @@ jobs:
               OpenAISecretArn="${{ steps.sm_arns.outputs.openai }}" \
               PineconeSecretArn="${{ steps.sm_arns.outputs.pinecone }}" \
               MinCapacity="1" MaxCapacity="2" CpuScaleTarget="60" \
-              TGPrefix="medchat" BlueTGName="${{ steps.blue_tg_name.outputs.name }}"
+              TGPrefix="medchat" AlertEmail=""  # no email alerts for staging
 
       - name: Start CodeDeploy blue/green (staging)
         shell: bash
@@ -140,43 +122,24 @@ jobs:
           set -euo pipefail
           STACK="${PROJECT_NAME}-staging"
           FAMILY="$STACK"
-
           TASK_DEF_ARN="$(aws ecs list-task-definitions \
             --family-prefix "$FAMILY" --sort DESC --max-items 1 \
             --query 'taskDefinitionArns[0]' --output text --region "$AWS_REGION")"
-          echo "TaskDef: $TASK_DEF_ARN"
-
           CONTENT="$(jq -n --arg td "$TASK_DEF_ARN" --argjson port "$APP_PORT" \
             '{version:1,Resources:[{TargetService:{Type:"AWS::ECS::Service",Properties:{TaskDefinition:$td,LoadBalancerInfo:{ContainerName:"web",ContainerPort:$port}}}}]}' \
             | jq -Rs .)"
-
           DEPLOY_ID="$(aws deploy create-deployment \
             --application-name "$STACK" \
             --deployment-group-name "$STACK" \
             --revision "revisionType=AppSpecContent,appSpecContent={content=$CONTENT}" \
             --query deploymentId --output text --region "$AWS_REGION")"
-          echo "DeployId: $DEPLOY_ID"
           aws deploy wait deployment-successful --deployment-id "$DEPLOY_ID" --region "$AWS_REGION"
 
       - name: Output ALB DNS (staging)
-        id: out
         run: |
           DNS=$(aws cloudformation describe-stacks --stack-name "${PROJECT_NAME}-staging" \
             --query "Stacks[0].Outputs[?OutputKey=='AlbDNS'].OutputValue" --output text)
-          echo "dns=$DNS" >> $GITHUB_OUTPUT
           echo "Staging ALB: http://$DNS"
-
-      - name: Wait for /health (staging)
-        run: |
-          URL="http://${{ steps.out.outputs.dns }}/health"
-          echo "Waiting for $URL ..."
-          for i in {1..40}; do
-            code=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || true)
-            echo "Attempt $i -> $code"
-            if [ "$code" = "200" ]; then exit 0; fi
-            sleep 10
-          done
-          echo "Health check failed"; exit 1
 
   deploy_production:
     runs-on: ubuntu-latest
@@ -205,23 +168,6 @@ jobs:
           PINECONE_ARN=$(aws secretsmanager describe-secret --secret-id "${PROJECT_NAME}/production/PINECONE_API_KEY" --query 'ARN' --output text)
           echo "openai=$OPENAI_ARN" >> $GITHUB_OUTPUT
           echo "pinecone=$PINECONE_ARN" >> $GITHUB_OUTPUT
-          echo "OPENAI ARN: $OPENAI_ARN"
-          echo "PINECONE ARN: $PINECONE_ARN"
-
-      - name: Resolve blue TG NAME (production)
-        id: blue_tg_name_prod
-        run: |
-          STACK="${{ env.PROJECT_NAME }}-production"
-          TG_ARN=$(aws ecs describe-services \
-            --cluster "$STACK" \
-            --services "$STACK" \
-            --query 'services[0].loadBalancers[0].targetGroupArn' \
-            --output text --region "${{ env.AWS_REGION }}")
-          NAME=$(aws elbv2 describe-target-groups \
-            --target-group-arns "$TG_ARN" \
-            --query 'TargetGroups[0].TargetGroupName' \
-            --output text --region "${{ env.AWS_REGION }}")
-          echo "name=$NAME" >> "$GITHUB_OUTPUT"
 
       - name: Deploy CFN (production)
         run: |
@@ -235,9 +181,8 @@ jobs:
               AppPort="${APP_PORT}" ContainerCpu="${CPU}" ContainerMemory="${MEMORY}" DesiredCount="${DESIRED_COUNT}" \
               OpenAISecretArn="${{ steps.sm_arns_prod.outputs.openai }}" \
               PineconeSecretArn="${{ steps.sm_arns_prod.outputs.pinecone }}" \
-              AlertEmail="abelashishroy@gmail.com" \
               MinCapacity="1" MaxCapacity="2" CpuScaleTarget="60" \
-              TGPrefix="medchat" BlueTGName="${{ steps.blue_tg_name_prod.outputs.name }}"
+              TGPrefix="medchat" AlertEmail="abelashishroy@gmail.com"
 
       - name: Start CodeDeploy blue/green (production)
         shell: bash
@@ -249,22 +194,17 @@ jobs:
           set -euo pipefail
           STACK="${PROJECT_NAME}-production"
           FAMILY="$STACK"
-
           TASK_DEF_ARN="$(aws ecs list-task-definitions \
             --family-prefix "$FAMILY" --sort DESC --max-items 1 \
             --query 'taskDefinitionArns[0]' --output text --region "$AWS_REGION")"
-          echo "TaskDef: $TASK_DEF_ARN"
-
           CONTENT="$(jq -n --arg td "$TASK_DEF_ARN" --argjson port "$APP_PORT" \
             '{version:1,Resources:[{TargetService:{Type:"AWS::ECS::Service",Properties:{TaskDefinition:$td,LoadBalancerInfo:{ContainerName:"web",ContainerPort:$port}}}}]}' \
             | jq -Rs .)"
-
           DEPLOY_ID="$(aws deploy create-deployment \
             --application-name "$STACK" \
             --deployment-group-name "$STACK" \
             --revision "revisionType=AppSpecContent,appSpecContent={content=$CONTENT}" \
             --query deploymentId --output text --region "$AWS_REGION")"
-          echo "DeployId: $DEPLOY_ID"
           aws deploy wait deployment-successful --deployment-id "$DEPLOY_ID" --region "$AWS_REGION"
 
       - name: Output ALB DNS (production)

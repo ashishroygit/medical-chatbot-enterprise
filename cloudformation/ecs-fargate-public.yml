@@ -38,10 +38,6 @@ Parameters:
   TGPrefix:
     Type: String
     Default: "medchat"
-    Description: "Short prefix for TargetGroup names (<=32 chars)"
-  BlueTGName:
-    Type: String
-    Description: "Existing (blue) Target Group NAME (not ARN)"
   AlertEmail:
     Type: String
     Default: ""
@@ -148,10 +144,11 @@ Resources:
       Scheme: internet-facing
       IpAddressType: ipv4
 
+  # Explicit names so CodeDeploy can always target them
   TG:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
-      # No Name: keep existing blue TG without replacement
+      Name: !Sub "${TGPrefix}-${Env}-blue"
       TargetType: ip
       Protocol: HTTP
       Port: !Ref AppPort
@@ -265,7 +262,7 @@ Resources:
       - ListenerHTTP
       - ListenerTestHTTP
     Properties:
-      ServiceName: !Sub "${ProjectName}-${Env}-svc"   # new name to allow replacement
+      ServiceName: !Sub "${ProjectName}-${Env}-svc"   # fixed name (new vs old)
       Cluster: !Ref Cluster
       TaskDefinition: !Ref TaskDefinition
       DesiredCount: !Ref DesiredCount
@@ -283,7 +280,6 @@ Resources:
           ContainerName: web
           ContainerPort: !Ref AppPort
 
-  # Autoscaling (target tracking on CPU)
   ScalableTarget:
     Type: AWS::ApplicationAutoScaling::ScalableTarget
     Properties:
@@ -306,7 +302,6 @@ Resources:
         ScaleInCooldown: 120
         ScaleOutCooldown: 60
 
-  # CodeDeploy (blue/green)
   CodeDeployRole:
     Type: AWS::IAM::Role
     Properties:
@@ -350,7 +345,7 @@ Resources:
       LoadBalancerInfo:
         TargetGroupPairInfoList:
           - TargetGroups:
-              - Name: !Ref BlueTGName
+              - Name: !Sub "${TGPrefix}-${Env}-blue"
               - Name: !Sub "${TGPrefix}-${Env}-green"
             ProdTrafficRoute:
               ListenerArns: [ !Ref ListenerHTTP ]
@@ -360,7 +355,6 @@ Resources:
         - ClusterName: !Sub "${ProjectName}-${Env}"
           ServiceName: !Sub "${ProjectName}-${Env}-svc"
 
-  # Optional: SNS + basic ALB 5XX alarm (prod only if AlertEmail set)
   AlertsTopic:
     Type: AWS::SNS::Topic
     Condition: HasAlertEmail
