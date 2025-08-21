@@ -11,8 +11,8 @@ permissions:
 
 env:
   AWS_REGION: us-east-1
-  PROJECT_NAME: medical-chatbot-autodeploy
-  ECR_REPO: medical-chatbot-autodeploy
+  PROJECT_NAME: medical-chatbot-enterprise
+  ECR_REPO: medical-chatbot-enterprise
   CFN_TEMPLATE: cloudformation/ecs-fargate-public.yml
   APP_PORT: "8080"
   CPU: "512"
