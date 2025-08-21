@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: ECS Fargate (public subnets, no NAT) + ALB + Logs + IAM
+Description: ECS Fargate (public subnets, no NAT) + ALB + Logs + IAM + Alerts
 
 Parameters:
   ProjectName:
@@ -26,6 +26,16 @@ Parameters:
   PineconeSecretArn:
     Type: String
     Description: "ARN of the Secrets Manager secret for PINECONE_API_KEY"
+
+  # NEW: optional email for alerts (leave blank to skip subscription)
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: "Optional email for SNS alerts subscription (blank = no email subscription)"
+
+Conditions:
+  # NEW: create an email subscription only if an email is provided
+  HasAlertEmail: !Not [ !Equals [ !Ref AlertEmail, "" ] ]
 
 Resources:
   VPC:
@@ -207,7 +217,7 @@ Resources:
             LogDriver: awslogs
             Options:
               awslogs-group: !Ref LogGroup
-              awslogs-region: !Ref AWS::Region
+              awslogs-region: !Sub "${AWS::Region}"
               awslogs-stream-prefix: ecs
 
   Service:
@@ -219,6 +229,8 @@ Resources:
       TaskDefinition: !Ref TaskDefinition
       DesiredCount: !Ref DesiredCount
       LaunchType: FARGATE
+      # (Optional hardening) give new tasks a minute before ALB judges health
+      HealthCheckGracePeriodSeconds: 60
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
@@ -229,6 +241,81 @@ Resources:
           ContainerName: web
           ContainerPort: !Ref AppPort
 
+  # ===================== NEW: Alerts (SNS + CloudWatch) =====================
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${ProjectName}-${Env}-alerts"
+
+  AlarmSubscriptionEmail:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  AlarmAlbTarget5xx:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Env}-ALB-Target5xx"
+      AlarmDescription: "High 5xx from targets behind ALB"
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt ALB.LoadBalancerFullName
+        - Name: TargetGroup
+          Value: !GetAtt TG.TargetGroupFullName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [ !Ref AlarmTopic ]
+
+  AlarmAlbUnhealthyTargets:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Env}-ALB-UnhealthyTargets"
+      AlarmDescription: "Any target becomes unhealthy"
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt ALB.LoadBalancerFullName
+        - Name: TargetGroup
+          Value: !GetAtt TG.TargetGroupFullName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [ !Ref AlarmTopic ]
+
+  AlarmEcsCpuHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${ProjectName}-${Env}-ECS-CPU-High"
+      AlarmDescription: "ECS service CPU >= 80% for 5 min"
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value: !Sub "${ProjectName}-${Env}"
+        - Name: ServiceName
+          Value: !Sub "${ProjectName}-${Env}"
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 5
+      Threshold: 80
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [ !Ref AlarmTopic ]
+
 Outputs:
   AlbDNS:
     Description: "Public DNS of the Application Load Balancer"
@@ -236,3 +323,10 @@ Outputs:
   Url:
     Description: "App URL"
     Value: !Sub "http://${ALB.DNSName}"
+  # Helpful outputs if you ever need to script alarm creation
+  LoadBalancerFullName:
+    Value: !GetAtt ALB.LoadBalancerFullName
+  TargetGroupFullName:
+    Value: !GetAtt TG.TargetGroupFullName
+  AlertsTopicArn:
+    Value: !Ref AlarmTopic

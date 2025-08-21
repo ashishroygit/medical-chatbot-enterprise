@@ -96,7 +96,8 @@ jobs:
               ImageUri="${{ needs.build_and_push.outputs.image_uri }}" \
               AppPort="${APP_PORT}" ContainerCpu="${CPU}" ContainerMemory="${MEMORY}" DesiredCount="${DESIRED_COUNT}" \
               OpenAISecretArn="${{ steps.sm_arns.outputs.openai }}" \
-              PineconeSecretArn="${{ steps.sm_arns.outputs.pinecone }}"
+              PineconeSecretArn="${{ steps.sm_arns.outputs.pinecone }}" \
+              AlertEmail="abelashishroy@gmail.com"
 
       - name: Output ALB DNS (staging)
         id: out
@@ -159,7 +160,8 @@ jobs:
               ImageUri="${{ needs.build_and_push.outputs.image_uri }}" \
               AppPort="${APP_PORT}" ContainerCpu="${CPU}" ContainerMemory="${MEMORY}" DesiredCount="${DESIRED_COUNT}" \
               OpenAISecretArn="${{ steps.sm_arns_prod.outputs.openai }}" \
-              PineconeSecretArn="${{ steps.sm_arns_prod.outputs.pinecone }}"
+              PineconeSecretArn="${{ steps.sm_arns_prod.outputs.pinecone }}" \
+              AlertEmail="abelashishroy@gmail.com"
 
       - name: Output ALB DNS (production)
         run: |
