@@ -157,6 +157,17 @@ Resources:
       HealthCheckProtocol: HTTP
       Matcher: { HttpCode: 200-399 }
 
+    TGGreen:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      TargetType: ip
+      Protocol: HTTP
+      Port: !Ref AppPort
+      VpcId: !Ref VPC
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      Matcher: { HttpCode: 200-399 }
+
   ListenerHTTP:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
@@ -374,3 +385,7 @@ Outputs:
     Value: !GetAtt TG.TargetGroupFullName
   AlertsTopicArn:
     Value: !Ref AlarmTopic
+  BlueTGFullName:
+    Value: !GetAtt TG.TargetGroupFullName
+  GreenTGFullName:
+    Value: !GetAtt TGGreen.TargetGroupFullName
