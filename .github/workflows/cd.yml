@@ -15,7 +15,6 @@ env:
   ECR_REPO: medical-chatbot-enterprise
   CFN_TEMPLATE: cloudformation/ecs-fargate-public.yml
 
-  # App/task params (match your CFN Parameters)
   APP_PORT: "8080"
   CPU: "512"
   MEMORY: "1024"
@@ -128,13 +127,11 @@ jobs:
           set -euo pipefail
           STACK="${PROJECT_NAME}-staging"
           FAMILY="$STACK"
-          # latest task def created by CFN update (ImageUri change)
           TASK_DEF_ARN="$(aws ecs list-task-definitions \
             --family-prefix "$FAMILY" --sort DESC --max-items 1 \
             --query 'taskDefinitionArns[0]' --output text --region "$AWS_REGION")"
           echo "TaskDef: $TASK_DEF_ARN"
 
-          # Build AppSpec JSON safely and encode as a single-line JSON string
           CONTENT="$(jq -n --arg td "$TASK_DEF_ARN" --argjson port "$APP_PORT" \
             '{version:1,Resources:[{TargetService:{Type:"AWS::ECS::Service",Properties:{TaskDefinition:$td,LoadBalancerInfo:{ContainerName:"web",ContainerPort:$port}}}}]}' \
             | jq -Rs .)"
@@ -166,7 +163,7 @@ jobs:
   deploy_production:
     runs-on: ubuntu-latest
     needs: [build_and_push, deploy_staging]
-    environment: production   # set required reviewers in GitHub → Settings → Environments → production
+    environment: production
     steps:
       - uses: actions/checkout@v4
 
