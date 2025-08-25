@@ -303,28 +303,28 @@ Resources:
         ScaleOutCooldown: 60
 
   CodeDeployRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "${ProjectName}-${Env}-codedeploy"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: { Service: codedeploy.amazonaws.com }
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS
+  Type: AWS::IAM::Role
+  Properties:
+    RoleName: !Sub "${ProjectName}-${Env}-codedeploy"
+    AssumeRolePolicyDocument:
+      Version: "2012-10-17"
+      Statement:
+        - Effect: Allow
+          Principal: { Service: codedeploy.amazonaws.com }
+          Action: sts:AssumeRole
+    ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS
 
-  CodeDeployApp:
-    Type: AWS::CodeDeploy::Application
-    Properties:
-      ApplicationName: !Sub "${ProjectName}-${Env}"
-      ComputePlatform: ECS
+CodeDeployApp:
+  Type: AWS::CodeDeploy::Application
+  Properties:
+    ApplicationName: !Sub "${ProjectName}-${Env}"
+    ComputePlatform: ECS
 
-  CodeDeployDG:
+CodeDeployDG:
   Type: AWS::CodeDeploy::DeploymentGroup
   DependsOn:
-    - Service
+    - Service          # ensure ECS service exists first
     - TG
     - TGGreen
     - ListenerHTTP
@@ -334,6 +334,7 @@ Resources:
     DeploymentGroupName: !Sub "${ProjectName}-${Env}"
     ServiceRoleArn: !GetAtt CodeDeployRole.Arn
 
+    # REQUIRED for ECS:
     DeploymentStyle:
       DeploymentType: BLUE_GREEN
       DeploymentOption: WITH_TRAFFIC_CONTROL
@@ -345,24 +346,29 @@ Resources:
         - DEPLOYMENT_FAILURE
         - DEPLOYMENT_STOP_ON_ALARM
         - DEPLOYMENT_STOP_ON_REQUEST
+
     BlueGreenDeploymentConfiguration:
       TerminateBlueInstancesOnDeploymentSuccess:
         Action: TERMINATE
         TerminationWaitTimeInMinutes: 1
       DeploymentReadyOption:
         ActionOnTimeout: CONTINUE_DEPLOYMENT
+
     LoadBalancerInfo:
       TargetGroupPairInfoList:
         - TargetGroups:
+            # IMPORTANT: CodeDeploy wants TG **names**, not ARNs.
             - Name: !Sub "${TGPrefix}-${Env}-blue"
             - Name: !Sub "${TGPrefix}-${Env}-green"
           ProdTrafficRoute:
-            ListenerArns: [!Ref ListenerHTTP]
+            ListenerArns: [ !Ref ListenerHTTP ]      # Listener Ref returns ARN
           TestTrafficRoute:
-            ListenerArns: [!Ref ListenerTestHTTP]
+            ListenerArns: [ !Ref ListenerTestHTTP ]  # Listener Ref returns ARN
+
     ECSServices:
       - ClusterName: !Sub "${ProjectName}-${Env}"
         ServiceName: !Sub "${ProjectName}-${Env}-svc"
+
 
 
   AlertsTopic:
