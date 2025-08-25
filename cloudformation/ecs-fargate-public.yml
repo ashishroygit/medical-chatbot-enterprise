@@ -322,39 +322,48 @@ Resources:
       ComputePlatform: ECS
 
   CodeDeployDG:
-    Type: AWS::CodeDeploy::DeploymentGroup
-    DependsOn:
-      - Service
-      - TG
-      - TGGreen
-      - ListenerHTTP
-      - ListenerTestHTTP
-    Properties:
-      ApplicationName: !Ref CodeDeployApp
-      DeploymentGroupName: !Sub "${ProjectName}-${Env}"
-      ServiceRoleArn: !GetAtt CodeDeployRole.Arn
-      DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
-      AutoRollbackConfiguration:
-        Enabled: true
-        Events: [DEPLOYMENT_FAILURE, DEPLOYMENT_STOP_ON_ALARM, DEPLOYMENT_STOP_ON_REQUEST]
-      BlueGreenDeploymentConfiguration:
-        TerminateBlueInstancesOnDeploymentSuccess:
-          Action: TERMINATE
-          TerminationWaitTimeInMinutes: 1
-        DeploymentReadyOption:
-          ActionOnTimeout: CONTINUE_DEPLOYMENT
-      LoadBalancerInfo:
-        TargetGroupPairInfoList:
-          - TargetGroups:
-              - Name: !Sub "${TGPrefix}-${Env}-blue"
-              - Name: !Sub "${TGPrefix}-${Env}-green"
-            ProdTrafficRoute:
-              ListenerArns: [ !Ref ListenerHTTP ]
-            TestTrafficRoute:
-              ListenerArns: [ !Ref ListenerTestHTTP ]
-      ECSServices:
-        - ClusterName: !Sub "${ProjectName}-${Env}"
-          ServiceName: !Sub "${ProjectName}-${Env}-svc"
+  Type: AWS::CodeDeploy::DeploymentGroup
+  DependsOn:
+    - Service
+    - TG
+    - TGGreen
+    - ListenerHTTP
+    - ListenerTestHTTP
+  Properties:
+    ApplicationName: !Ref CodeDeployApp
+    DeploymentGroupName: !Sub "${ProjectName}-${Env}"
+    ServiceRoleArn: !GetAtt CodeDeployRole.Arn
+
+    DeploymentStyle:
+      DeploymentType: BLUE_GREEN
+      DeploymentOption: WITH_TRAFFIC_CONTROL
+
+    DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
+    AutoRollbackConfiguration:
+      Enabled: true
+      Events:
+        - DEPLOYMENT_FAILURE
+        - DEPLOYMENT_STOP_ON_ALARM
+        - DEPLOYMENT_STOP_ON_REQUEST
+    BlueGreenDeploymentConfiguration:
+      TerminateBlueInstancesOnDeploymentSuccess:
+        Action: TERMINATE
+        TerminationWaitTimeInMinutes: 1
+      DeploymentReadyOption:
+        ActionOnTimeout: CONTINUE_DEPLOYMENT
+    LoadBalancerInfo:
+      TargetGroupPairInfoList:
+        - TargetGroups:
+            - Name: !Sub "${TGPrefix}-${Env}-blue"
+            - Name: !Sub "${TGPrefix}-${Env}-green"
+          ProdTrafficRoute:
+            ListenerArns: [!Ref ListenerHTTP]
+          TestTrafficRoute:
+            ListenerArns: [!Ref ListenerTestHTTP]
+    ECSServices:
+      - ClusterName: !Sub "${ProjectName}-${Env}"
+        ServiceName: !Sub "${ProjectName}-${Env}-svc"
+
 
   AlertsTopic:
     Type: AWS::SNS::Topic
