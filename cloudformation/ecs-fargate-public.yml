@@ -116,7 +116,7 @@ Resources:
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
-        - { IpProtocol: tcp, FromPort: 9000, ToPort: 9000, CidrIp: 0.0.0.0/0 } # test listener
+        - { IpProtocol: tcp, FromPort: 9000, ToPort: 9000, CidrIp: 0.0.0.0/0 }
       SecurityGroupEgress:
         - { IpProtocol: -1, CidrIp: 0.0.0.0/0 }
       Tags: [{ Key: Name, Value: !Sub "${ProjectName}-${Env}-alb-sg" }]
@@ -144,7 +144,6 @@ Resources:
       Scheme: internet-facing
       IpAddressType: ipv4
 
-  # Explicit names so CodeDeploy can always target them
   TG:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -262,7 +261,7 @@ Resources:
       - ListenerHTTP
       - ListenerTestHTTP
     Properties:
-      ServiceName: !Sub "${ProjectName}-${Env}-svc"   # fixed name (new vs old)
+      ServiceName: !Sub "${ProjectName}-${Env}-svc"
       Cluster: !Ref Cluster
       TaskDefinition: !Ref TaskDefinition
       DesiredCount: !Ref DesiredCount
