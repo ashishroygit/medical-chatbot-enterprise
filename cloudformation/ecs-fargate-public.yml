@@ -116,7 +116,7 @@ Resources:
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
-        - { IpProtocol: tcp, FromPort: 9000, ToPort: 9000, CidrIp: 0.0.0.0/0 } # test listener
+        - { IpProtocol: tcp, FromPort: 9000, ToPort: 9000, CidrIp: 0.0.0.0/0 }
       SecurityGroupEgress:
         - { IpProtocol: -1, CidrIp: 0.0.0.0/0 }
       Tags: [{ Key: Name, Value: !Sub "${ProjectName}-${Env}-alb-sg" }]
@@ -302,6 +302,7 @@ Resources:
         ScaleInCooldown: 120
         ScaleOutCooldown: 60
 
+  # >>> FIXED HERE <<<
   CodeDeployRole:
     Type: AWS::IAM::Role
     Properties:
@@ -313,7 +314,7 @@ Resources:
             Principal: { Service: codedeploy.amazonaws.com }
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRoleForECS
+        - arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS
 
   CodeDeployApp:
     Type: AWS::CodeDeploy::Application
