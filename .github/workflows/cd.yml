@@ -121,17 +121,17 @@ jobs:
         shell: bash
         env:
           AWS_REGION: ${{ env.AWS_REGION }}
-          PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          STACK: ${{ env.PROJECT_NAME }}-staging
           APP_PORT: ${{ env.APP_PORT }}
         run: |
           set -euo pipefail
-          STACK="${PROJECT_NAME}-staging"
-          FAMILY="$STACK"
+          # latest task def created by CFN update (ImageUri change)
           TASK_DEF_ARN="$(aws ecs list-task-definitions \
-            --family-prefix "$FAMILY" --sort DESC --max-items 1 \
+            --family-prefix "$STACK" --sort DESC --max-items 1 \
             --query 'taskDefinitionArns[0]' --output text --region "$AWS_REGION")"
           echo "TaskDef: $TASK_DEF_ARN"
 
+          # Build AppSpec JSON safely and encode as a single-line JSON string
           CONTENT="$(jq -n --arg td "$TASK_DEF_ARN" --argjson port "$APP_PORT" \
             '{version:1,Resources:[{TargetService:{Type:"AWS::ECS::Service",Properties:{TaskDefinition:$td,LoadBalancerInfo:{ContainerName:"web",ContainerPort:$port}}}}]}' \
             | jq -Rs .)"
@@ -143,6 +143,8 @@ jobs:
             --query deploymentId --output text --region "$AWS_REGION")"
           echo "DeployId: $DEPLOY_ID"
           aws deploy wait deployment-successful --deployment-id "$DEPLOY_ID" --region "$AWS_REGION"
+
+
 
       - name: Output ALB DNS + health check (staging)
         shell: bash
@@ -207,14 +209,12 @@ jobs:
         shell: bash
         env:
           AWS_REGION: ${{ env.AWS_REGION }}
-          PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          STACK: ${{ env.PROJECT_NAME }}-production
           APP_PORT: ${{ env.APP_PORT }}
         run: |
           set -euo pipefail
-          STACK="${PROJECT_NAME}-production"
-          FAMILY="$STACK"
           TASK_DEF_ARN="$(aws ecs list-task-definitions \
-            --family-prefix "$FAMILY" --sort DESC --max-items 1 \
+            --family-prefix "$STACK" --sort DESC --max-items 1 \
             --query 'taskDefinitionArns[0]' --output text --region "$AWS_REGION")"
           echo "TaskDef: $TASK_DEF_ARN"
 
@@ -229,6 +229,8 @@ jobs:
             --query deploymentId --output text --region "$AWS_REGION")"
           echo "DeployId: $DEPLOY_ID"
           aws deploy wait deployment-successful --deployment-id "$DEPLOY_ID" --region "$AWS_REGION"
+
+
 
       - name: Output ALB DNS (production)
         run: |
