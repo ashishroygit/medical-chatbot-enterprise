@@ -354,7 +354,7 @@ Resources:
               ListenerArns: [!Ref ListenerHTTP]
             TestTrafficRoute:
               ListenerArns: [!Ref ListenerTestHTTP]
-      ECSService:
+      EcsService:
         ClusterName: !Sub "${ProjectName}-${Env}"
         ServiceName: !Sub "${ProjectName}-${Env}-svc"
 
