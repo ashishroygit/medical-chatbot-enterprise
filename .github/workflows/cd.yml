@@ -129,29 +129,23 @@ jobs:
                --query 'taskDefinitionArns[0]' --output text --region "$AWS_REGION")
           echo "TaskDef: $TD"
 
-          APP_SPEC_OBJ=$(jq -n --arg td "$TD" --argjson port "$APP_PORT" \
-            '{version:1,Resources:[{TargetService:{Type:"AWS::ECS::Service",Properties:{TaskDefinition:$td,LoadBalancerInfo:{ContainerName:"web",ContainerPort:$port}}}}]}')
+          # AppSpec for ECS MUST use version "0.0"
+          APP_SPEC_OBJ=$(jq -n \
+            --arg ver "0.0" \
+            --arg td "$TD" \
+            --argjson port "$APP_PORT" \
+            '{version:$ver,Resources:[{TargetService:{Type:"AWS::ECS::Service",Properties:{TaskDefinition:$td,LoadBalancerInfo:{ContainerName:"web",ContainerPort:$port}}}}]}')
 
           REQ=$(jq -n --arg app "$STACK" --arg dg "$STACK" --arg content "$APP_SPEC_OBJ" \
-            '{applicationName:$app,deploymentGroupName:$dg,revision:{revisionType:"AppSpecContent",appSpecContent:{content:$content}}}')
+            '{applicationName:$app,
+              deploymentGroupName:$dg,
+              revision:{revisionType:"AppSpecContent", appSpecContent:{content:$content}}}')
 
           DEPLOY_ID=$(aws deploy create-deployment --cli-input-json "$REQ" \
                        --query deploymentId --output text --region "$AWS_REGION")
           echo "DeployId: $DEPLOY_ID"
 
-          set +e
           aws deploy wait deployment-successful --deployment-id "$DEPLOY_ID" --region "$AWS_REGION"
-          RC=$?
-          if [ $RC -ne 0 ]; then
-            echo "------ CodeDeploy failure details ------"
-            aws deploy get-deployment --deployment-id "$DEPLOY_ID" --region "$AWS_REGION" \
-              --query 'deploymentInfo.[status,errorInformation]' --output json || true
-            echo "------ Events ------"
-            aws deploy get-deployment --deployment-id "$DEPLOY_ID" --region "$AWS_REGION" \
-              --query 'deploymentInfo.createTime' --output json || true
-            exit 1
-          fi
-          set -e
 
       - name: Output ALB DNS + health check (staging)
         shell: bash
@@ -223,26 +217,21 @@ jobs:
                --query 'taskDefinitionArns[0]' --output text --region "$AWS_REGION")
           echo "TaskDef: $TD"
 
-          APP_SPEC_OBJ=$(jq -n --arg td "$TD" --argjson port "$APP_PORT" \
-            '{version:1,Resources:[{TargetService:{Type:"AWS::ECS::Service",Properties:{TaskDefinition:$td,LoadBalancerInfo:{ContainerName:"web",ContainerPort:$port}}}}]}')
+          APP_SPEC_OBJ=$(jq -n \
+            --arg ver "0.0" \
+            --arg td "$TD" \
+            --argjson port "$APP_PORT" \
+            '{version:$ver,Resources:[{TargetService:{Type:"AWS::ECS::Service",Properties:{TaskDefinition:$td,LoadBalancerInfo:{ContainerName:"web",ContainerPort:$port}}}}]}')
 
           REQ=$(jq -n --arg app "$STACK" --arg dg "$STACK" --arg content "$APP_SPEC_OBJ" \
-            '{applicationName:$app,deploymentGroupName:$dg,revision:{revisionType:"AppSpecContent",appSpecContent:{content:$content}}}')
+            '{applicationName:$app,
+              deploymentGroupName:$dg,
+              revision:{revisionType:"AppSpecContent", appSpecContent:{content:$content}}}')
 
           DEPLOY_ID=$(aws deploy create-deployment --cli-input-json "$REQ" \
                        --query deploymentId --output text --region "$AWS_REGION")
           echo "DeployId: $DEPLOY_ID"
-
-          set +e
           aws deploy wait deployment-successful --deployment-id "$DEPLOY_ID" --region "$AWS_REGION"
-          RC=$?
-          if [ $RC -ne 0 ]; then
-            echo "------ CodeDeploy failure details ------"
-            aws deploy get-deployment --deployment-id "$DEPLOY_ID" --region "$AWS_REGION" \
-              --query 'deploymentInfo.[status,errorInformation]' --output json || true
-            exit 1
-          fi
-          set -e
 
       - name: Output ALB DNS (production)
         run: |

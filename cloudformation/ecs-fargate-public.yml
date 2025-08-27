@@ -252,7 +252,7 @@ Resources:
             LogDriver: awslogs
             Options:
               awslogs-group: !Ref LogGroup
-              awslogs-region: !Ref AWS::Region
+              awslogs-region: !Ref "AWS::Region"
               awslogs-stream-prefix: ecs
 
   Service:
@@ -302,7 +302,6 @@ Resources:
         ScaleInCooldown: 120
         ScaleOutCooldown: 60
 
-  # >>> FIXED HERE <<<
   CodeDeployRole:
     Type: AWS::IAM::Role
     Properties:
@@ -352,12 +351,12 @@ Resources:
               - Name: !Sub "${TGPrefix}-${Env}-blue"
               - Name: !Sub "${TGPrefix}-${Env}-green"
             ProdTrafficRoute:
-              ListenerArns: [ !Ref ListenerHTTP ]
+              ListenerArns: [!Ref ListenerHTTP]
             TestTrafficRoute:
-              ListenerArns: [ !Ref ListenerTestHTTP ]
-      ECSServices:
-        - ClusterName: !Sub "${ProjectName}-${Env}"
-          ServiceName: !Sub "${ProjectName}-${Env}-svc"
+              ListenerArns: [!Ref ListenerTestHTTP]
+      ECSService:
+        ClusterName: !Sub "${ProjectName}-${Env}"
+        ServiceName: !Sub "${ProjectName}-${Env}-svc"
 
   AlertsTopic:
     Type: AWS::SNS::Topic
