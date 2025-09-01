@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: ECS Fargate (public subnets, no NAT) + ALB + Logs + IAM (rolling deploy)
+Description: ECS Fargate (public subnets, no NAT) + ALB + Logs + IAM + CodeDeploy blue/green
 
 Parameters:
   ProjectName:
@@ -35,6 +35,9 @@ Parameters:
   CpuScaleTarget:
     Type: Number
     Default: 60
+  TGPrefix:
+    Type: String
+    Default: "medchat"
   AlertEmail:
     Type: String
     Default: ""
@@ -112,7 +115,8 @@ Resources:
       GroupDescription: ALB SG
       VpcId: !Ref VPC
       SecurityGroupIngress:
-        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 80,   ToPort: 80,   CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 9000, ToPort: 9000, CidrIp: 0.0.0.0/0 } # test listener
       SecurityGroupEgress:
         - { IpProtocol: -1, CidrIp: 0.0.0.0/0 }
       Tags: [{ Key: Name, Value: !Sub "${ProjectName}-${Env}-alb-sg" }]
@@ -143,6 +147,19 @@ Resources:
   TG:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
+      Name: !Sub "${TGPrefix}-${Env}-blue"
+      TargetType: ip
+      Protocol: HTTP
+      Port: !Ref AppPort
+      VpcId: !Ref VPC
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      Matcher: { HttpCode: 200-399 }
+
+  TGGreen:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${TGPrefix}-${Env}-green"
       TargetType: ip
       Protocol: HTTP
       Port: !Ref AppPort
@@ -160,6 +177,16 @@ Resources:
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref TG
+
+  ListenerTestHTTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 9000
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TGGreen
 
   LogGroup:
     Type: AWS::Logs::LogGroup
@@ -230,27 +257,25 @@ Resources:
 
   Service:
     Type: AWS::ECS::Service
-    DependsOn: ListenerHTTP
+    DependsOn:
+      - ListenerHTTP
+      - ListenerTestHTTP
     Properties:
       ServiceName: !Sub "${ProjectName}-${Env}-svc"
       Cluster: !Ref Cluster
       TaskDefinition: !Ref TaskDefinition
       DesiredCount: !Ref DesiredCount
       LaunchType: FARGATE
+      DeploymentController:
+        Type: CODE_DEPLOY
       HealthCheckGracePeriodSeconds: 60
-      DeploymentConfiguration:
-        DeploymentCircuitBreaker:
-          Enable: true
-          Rollback: true
-        MaximumPercent: 200
-        MinimumHealthyPercent: 100
       NetworkConfiguration:
         AwsvpcConfiguration:
           AssignPublicIp: ENABLED
           Subnets: [!Ref PublicSubnetA, !Ref PublicSubnetB]
           SecurityGroups: [!Ref EcsSG]
       LoadBalancers:
-        - TargetGroupArn: !Ref TG
+        - TargetGroupArn: !Ref TG        # BLUE only
           ContainerName: web
           ContainerPort: !Ref AppPort
 
@@ -276,6 +301,62 @@ Resources:
           PredefinedMetricType: ECSServiceAverageCPUUtilization
         ScaleInCooldown: 120
         ScaleOutCooldown: 60
+
+  CodeDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Env}-codedeploy"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codedeploy.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS
+
+  CodeDeployApp:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub "${ProjectName}-${Env}"
+      ComputePlatform: ECS
+
+  CodeDeployDG:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    DependsOn:
+      - Service
+      - TG
+      - TGGreen
+      - ListenerHTTP
+      - ListenerTestHTTP
+    Properties:
+      ApplicationName: !Ref CodeDeployApp
+      DeploymentGroupName: !Sub "${ProjectName}-${Env}"
+      ServiceRoleArn: !GetAtt CodeDeployRole.Arn
+      DeploymentStyle:
+        DeploymentType: BLUE_GREEN
+        DeploymentOption: WITH_TRAFFIC_CONTROL
+      AutoRollbackConfiguration:
+        Enabled: true
+        Events: [DEPLOYMENT_FAILURE, DEPLOYMENT_STOP_ON_ALARM, DEPLOYMENT_STOP_ON_REQUEST]
+      BlueGreenDeploymentConfiguration:
+        TerminateBlueInstancesOnDeploymentSuccess:
+          Action: TERMINATE
+          TerminationWaitTimeInMinutes: 1
+        DeploymentReadyOption:
+          ActionOnTimeout: CONTINUE_DEPLOYMENT
+      LoadBalancerInfo:
+        TargetGroupPairInfoList:
+          - TargetGroups:
+              - Name: !Sub "${TGPrefix}-${Env}-blue"
+              - Name: !Sub "${TGPrefix}-${Env}-green"
+            ProdTrafficRoute:
+              ListenerArns: [ !Ref ListenerHTTP ]
+            TestTrafficRoute:
+              ListenerArns: [ !Ref ListenerTestHTTP ]
+      ECSServices:
+        - ClusterName: !Sub "${ProjectName}-${Env}"
+          ServiceName: !Sub "${ProjectName}-${Env}-svc"
 
   AlertsTopic:
     Type: AWS::SNS::Topic
