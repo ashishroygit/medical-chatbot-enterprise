@@ -1,4 +1,4 @@
-name: CD ECS Fargate via CloudFormation (blue/green)
+name: CD ECS Fargate via CloudFormation (rolling)
 
 on:
   push:
@@ -22,7 +22,6 @@ env:
   MIN_CAPACITY: "1"
   MAX_CAPACITY: "2"
   CPU_SCALE_TARGET: "60"
-  TG_PREFIX: "medchat"
 
 jobs:
   build_and_push:
@@ -115,37 +114,7 @@ jobs:
               OpenAISecretArn="${{ steps.sm_arns.outputs.openai }}" \
               PineconeSecretArn="${{ steps.sm_arns.outputs.pinecone }}" \
               MinCapacity="${MIN_CAPACITY}" MaxCapacity="${MAX_CAPACITY}" CpuScaleTarget="${CPU_SCALE_TARGET}" \
-              TGPrefix="${TG_PREFIX}" AlertEmail=""
-
-      - name: Start CodeDeploy blue/green (staging)
-        shell: bash
-        env:
-          AWS_REGION: ${{ env.AWS_REGION }}
-          STACK: "${{ env.PROJECT_NAME }}-staging"
-          APP_PORT: ${{ env.APP_PORT }}
-        run: |
-          set -euo pipefail
-          TD=$(aws ecs list-task-definitions --family-prefix "$STACK" --sort DESC --max-items 1 \
-               --query 'taskDefinitionArns[0]' --output text --region "$AWS_REGION")
-          echo "TaskDef: $TD"
-
-          # AppSpec for ECS MUST use version "0.0"
-          APP_SPEC_OBJ=$(jq -n \
-            --arg ver "0.0" \
-            --arg td "$TD" \
-            --argjson port "$APP_PORT" \
-            '{version:$ver,Resources:[{TargetService:{Type:"AWS::ECS::Service",Properties:{TaskDefinition:$td,LoadBalancerInfo:{ContainerName:"web",ContainerPort:$port}}}}]}')
-
-          REQ=$(jq -n --arg app "$STACK" --arg dg "$STACK" --arg content "$APP_SPEC_OBJ" \
-            '{applicationName:$app,
-              deploymentGroupName:$dg,
-              revision:{revisionType:"AppSpecContent", appSpecContent:{content:$content}}}')
-
-          DEPLOY_ID=$(aws deploy create-deployment --cli-input-json "$REQ" \
-                       --query deploymentId --output text --region "$AWS_REGION")
-          echo "DeployId: $DEPLOY_ID"
-
-          aws deploy wait deployment-successful --deployment-id "$DEPLOY_ID" --region "$AWS_REGION"
+              AlertEmail=""
 
       - name: Output ALB DNS + health check (staging)
         shell: bash
@@ -203,35 +172,7 @@ jobs:
               OpenAISecretArn="${{ steps.sm_arns_prod.outputs.openai }}" \
               PineconeSecretArn="${{ steps.sm_arns_prod.outputs.pinecone }}" \
               MinCapacity="${MIN_CAPACITY}" MaxCapacity="${MAX_CAPACITY}" CpuScaleTarget="${CPU_SCALE_TARGET}" \
-              TGPrefix="${TG_PREFIX}" AlertEmail="abelashishroy@gmail.com"
-
-      - name: Start CodeDeploy blue/green (production)
-        shell: bash
-        env:
-          AWS_REGION: ${{ env.AWS_REGION }}
-          STACK: "${{ env.PROJECT_NAME }}-production"
-          APP_PORT: ${{ env.APP_PORT }}
-        run: |
-          set -euo pipefail
-          TD=$(aws ecs list-task-definitions --family-prefix "$STACK" --sort DESC --max-items 1 \
-               --query 'taskDefinitionArns[0]' --output text --region "$AWS_REGION")
-          echo "TaskDef: $TD"
-
-          APP_SPEC_OBJ=$(jq -n \
-            --arg ver "0.0" \
-            --arg td "$TD" \
-            --argjson port "$APP_PORT" \
-            '{version:$ver,Resources:[{TargetService:{Type:"AWS::ECS::Service",Properties:{TaskDefinition:$td,LoadBalancerInfo:{ContainerName:"web",ContainerPort:$port}}}}]}')
-
-          REQ=$(jq -n --arg app "$STACK" --arg dg "$STACK" --arg content "$APP_SPEC_OBJ" \
-            '{applicationName:$app,
-              deploymentGroupName:$dg,
-              revision:{revisionType:"AppSpecContent", appSpecContent:{content:$content}}}')
-
-          DEPLOY_ID=$(aws deploy create-deployment --cli-input-json "$REQ" \
-                       --query deploymentId --output text --region "$AWS_REGION")
-          echo "DeployId: $DEPLOY_ID"
-          aws deploy wait deployment-successful --deployment-id "$DEPLOY_ID" --region "$AWS_REGION"
+              AlertEmail="abelashishroy@gmail.com"
 
       - name: Output ALB DNS (production)
         run: |
